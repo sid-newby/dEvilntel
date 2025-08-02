@@ -498,316 +498,156 @@ class DevIntel {
         this.interceptNetwork();
         this.startBatchProcessor();
         
-        console.log('[DevIntel] Initialized with session:', this.sessionId);
+        console.log(`%c DevIntel Activated | Session: ${this.sessionId} `, 'background: #667eea; color: white; padding: 2px 5px; border-radius: 3px;');
     }
     
     interceptConsole() {
-        ['log', 'error', 'warn', 'debug'].forEach(method => {
-            const original = console[method];
-            console[method] = (...args) => {
-                this.capture({
-                    type: method === 'log' ? 'log' : method,
-                    content: {
-                        message: args.map(arg => 
-                            typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
-                        ).join(' '),
-                        args: args
-                    },
-                    stack_trace: method === 'error' ? new Error().stack : null,
-                    context: this.gatherContext()
-                });
-                original.apply(console, args);
-            };
+        const originalConsole = {...console};
+        Object.keys(originalConsole).forEach(level => {
+            if (typeof originalConsole[level] === 'function') {
+                console[level] = (...args) => {
+                    originalConsole[level](...args);
+                    this.captureEvent('log', {
+                        level: level,
+                        message: args.map(arg => this.formatArg(arg)).join(' ')
+                    });
+                };
+            }
         });
     }
     
     interceptErrors() {
-        window.addEventListener('error', (event) => {
-            this.capture({
-                type: 'error',
-                content: {
-                    message: event.message,
-                    filename: event.filename,
-                    line: event.lineno,
-                    column: event.colno
-                },
-                stack_trace: event.error?.stack,
-                context: this.gatherContext()
-            });
+        window.addEventListener('error', event => {
+            this.captureEvent('error', {
+                message: event.message,
+                filename: event.filename,
+                lineno: event.lineno,
+                colno: event.colno,
+            }, event.error ? event.error.stack : null);
         });
         
-        window.addEventListener('unhandledrejection', (event) => {
-            this.capture({
-                type: 'error',
-                content: {
-                    message: 'Unhandled Promise Rejection',
-                    reason: event.reason
-                },
-                stack_trace: event.reason?.stack,
-                context: this.gatherContext()
-            });
+        window.addEventListener('unhandledrejection', event => {
+            this.captureEvent('error', {
+                message: `Unhandled promise rejection: ${event.reason}`,
+            }, event.reason ? event.reason.stack : null);
         });
     }
     
     interceptNetwork() {
         const originalFetch = window.fetch;
-        window.fetch = async (...args) => {
-            const startTime = performance.now();
-            try {
-                const response = await originalFetch(...args);
-                const duration = performance.now() - startTime;
-                
-                if (!response.ok) {
-                    this.capture({
-                        type: 'network',
-                        content: {
-                            url: args[0],
-                            status: response.status,
-                            statusText: response.statusText,
-                            duration: duration
-                        },
-                        context: this.gatherContext()
-                    });
-                }
-                
+        window.fetch = (...args) => {
+            const startTime = Date.now();
+            return originalFetch(...args).then(response => {
+                const duration = Date.now() - startTime;
+                this.captureEvent('network', {
+                    url: response.url,
+                    status: response.status,
+                    duration: duration,
+                    method: args.method || 'GET'
+                });
                 return response;
-            } catch (error) {
-                this.capture({
-                    type: 'network',
-                    content: {
-                        url: args[0],
-                        error: error.message,
-                        duration: performance.now() - startTime
-                    },
-                    stack_trace: error.stack,
-                    context: this.gatherContext()
+            }).catch(error => {
+                this.captureEvent('network', {
+                    url: args.url,
+                    error: error.message,
+                    method: args.method || 'GET'
                 });
                 throw error;
+            });
+        };
+    }
+    
+    captureEvent(type, content, stack_trace = null) {
+        const event = {
+            type: type,
+            timestamp: new Date().toISOString(),
+            session_id: this.sessionId,
+            content: content,
+            stack_trace: stack_trace,
+            context: {
+                url: window.location.href,
+                userAgent: navigator.userAgent,
+                framework: this.detectFramework()
+            }
+        };
+        
+        this.buffer.push(event);
+        if (this.buffer.length >= this.batchSize) {
+            this.flushBuffer();
+        }
+    }
+    
+    flushBuffer() {
+        if (this.buffer.length === 0) return;
+        
+        // Use WebSocket if available, otherwise fallback to fetch
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({type: 'bulk', events: this.buffer}));
+        } else {
+            fetch(`${this.endpoint}/ingest`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ events: this.buffer })
+            });
+        }
+        
+        this.buffer = [];
+    }
+    
+    startBatchProcessor() {
+        setInterval(() => this.flushBuffer(), this.flushInterval);
+        
+        // Connect WebSocket
+        this.ws = new WebSocket(this.endpoint.replace('http', 'ws') + '/ws');
+        this.ws.onopen = () => {
+            this.ws.send(JSON.stringify({
+                type: 'init',
+                sessionId: this.sessionId,
+                source: 'browser',
+                url: window.location.href,
+                userAgent: navigator.userAgent
+            }));
+        };
+        
+        this.ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+            if (message.type === 'solution') {
+                this.displaySolution(message);
             }
         };
     }
     
-    gatherContext() {
-        return {
-            url: location.href,
-            userAgent: navigator.userAgent,
-            timestamp: new Date().toISOString(),
-            viewport: {
-                width: window.innerWidth,
-                height: window.innerHeight
-            },
-            framework: this.detectFramework(),
-            performance: {
-                memory: performance.memory,
-                navigation: performance.getEntriesByType('navigation')[0]
-            }
-        };
+    displaySolution(solutionData) {
+        const { solution } = solutionData;
+        console.groupCollapsed(`%c DevIntel Solution (Confidence: ${solution.confidence.toFixed(2)}) `, 'background: #2e7d32; color: white; padding: 2px 5px; border-radius: 3px;');
+        console.log(`%cRoot Cause:`, 'font-weight: bold;', solution.root_cause);
+        console.log(`%cSuggested Fix:`, 'font-weight: bold;');
+        console.log(`%c${solution.solution_code}`, 'font-family: monospace; background: #222; padding: 5px; border-radius: 3px;');
+        console.log(`%cExplanation:`, 'font-weight: bold;', solution.explanation);
+        console.groupEnd();
     }
     
     detectFramework() {
         if (window.React) return { name: 'React', version: window.React.version };
         if (window.Vue) return { name: 'Vue', version: window.Vue.version };
-        if (window.angular) return { name: 'Angular', version: window.angular.version };
-        if (window.Ember) return { name: 'Ember', version: window.Ember.VERSION };
-        return { name: 'vanilla', version: null };
+        if (window.angular) return { name: 'Angular', version: window.angular.version.full };
+        return { name: 'unknown' };
     }
     
-    capture(event) {
-        this.buffer.push({
-            ...event,
-            session_id: this.sessionId
-        });
-        
-        if (this.buffer.length >= this.batchSize) {
-            this.flush();
+    formatArg(arg) {
+        if (arg instanceof Error) {
+            return arg.stack || arg.message;
         }
-    }
-    
-    async flush() {
-        if (this.buffer.length === 0) return;
-        
-        const events = [...this.buffer];
-        this.buffer = [];
-        
         try {
-            const response = await fetch(`${this.endpoint}/ingest`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ events })
-            });
-            
-            if (response.ok) {
-                const results = await response.json();
-                // Show solutions in console if available
-                results.forEach(result => {
-                    if (result.solution) {
-                        console.log(
-                            '%c[DevIntel Solution]%c ' + result.solution.root_cause,
-                            'background: #4CAF50; color: white; padding: 2px 4px; border-radius: 2px;',
-                            'color: #4CAF50; font-weight: bold;'
-                        );
-                        console.log('Fix:', result.solution.solution_code);
-                        console.log('Confidence:', result.solution.confidence);
-                    }
-                });
-            }
-        } catch (error) {
-            // Silently fail to not disrupt user experience
-            console.debug('[DevIntel] Failed to send events:', error);
+            return JSON.stringify(arg, null, 2);
+        } catch {
+            return String(arg);
         }
     }
-    
-    startBatchProcessor() {
-        setInterval(() => this.flush(), this.flushInterval);
-        
-        // Flush on page unload
-        window.addEventListener('beforeunload', () => this.flush());
-    }
 }
 
-// Auto-initialize
-if (!window.__devIntel) {
-    window.__devIntel = new DevIntel();
+// Initialize DevIntel
+if (!window.devIntel) {
+    window.devIntel = new DevIntel();
 }
-"""
-
-# ============= FastAPI Server Example =============
-
-SERVER_EXAMPLE = """
-# server.py - FastAPI server for DevIntel
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-
-app = FastAPI(title="DevIntel API")
-
-# CORS for browser extension
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-# Initialize DevIntel
-devintel = DevIntelAPI()
-
-@app.on_event("startup")
-async def startup():
-    await devintel.initialize()
-
-@app.post("/ingest")
-async def ingest_events(data: dict):
-    results = []
-    for event in data.get("events", []):
-        result = await devintel.ingest_event(event)
-        results.append(result)
-    return results
-
-@app.get("/patterns/{session_id}")
-async def get_patterns(session_id: str):
-    return await devintel.get_patterns(session_id)
-
-@app.get("/changelog/{session_id}")
-async def get_changelog(session_id: str):
-    return await devintel.get_changelog(session_id)
-
-@app.post("/outcome/{solution_id}")
-async def record_outcome(solution_id: str, data: dict):
-    await devintel.record_outcome(
-        solution_id,
-        data.get("success", False),
-        data.get("metrics", {})
-    )
-    return {"status": "recorded"}
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-"""
-
-# ============= MCP Server Integration =============
-
-MCP_SERVER_INTEGRATION = """
-# mcp_devintel.py - MCP Server for DevIntel
-import asyncio
-from mcp import MCPServer, Tool
-
-class DevIntelMCPServer(MCPServer):
-    def __init__(self):
-        super().__init__("devintel")
-        self.api = DevIntelAPI()
-        
-    async def initialize(self):
-        await self.api.initialize()
-        
-        # Register tools
-        self.register_tool(Tool(
-            name="search_errors",
-            description="Search for similar errors and solutions",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "error_message": {"type": "string"},
-                    "stack_trace": {"type": "string"}
-                }
-            },
-            handler=self.search_errors
-        ))
-        
-        self.register_tool(Tool(
-            name="get_solution",
-            description="Get solution for specific error pattern",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "error_id": {"type": "string"}
-                }
-            },
-            handler=self.get_solution
-        ))
-        
-        self.register_tool(Tool(
-            name="analyze_patterns",
-            description="Analyze patterns in development session",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "session_id": {"type": "string"}
-                }
-            },
-            handler=self.analyze_patterns
-        ))
-    
-    async def search_errors(self, error_message: str, stack_trace: str = None):
-        # Create temporary event for analysis
-        event = DevEvent(
-            id="temp_search",
-            type=EventType.ERROR,
-            timestamp=datetime.now(),
-            session_id="search",
-            content={"message": error_message},
-            stack_trace=stack_trace,
-            context={}
-        )
-        
-        solution = await self.api.intelligence.analyze_error(event)
-        return asdict(solution)
-    
-    async def get_solution(self, error_id: str):
-        # Fetch from storage
-        async with self.api.storage.pg_pool.acquire() as conn:
-            result = await conn.fetchrow("""
-                SELECT * FROM solutions
-                WHERE id = $1
-            """, f"sol_{error_id}")
-            
-            return dict(result) if result else None
-    
-    async def analyze_patterns(self, session_id: str):
-        return await self.api.get_patterns(session_id)
-
-# Run MCP server
-if __name__ == "__main__":
-    server = DevIntelMCPServer()
-    asyncio.run(server.run())
 """
