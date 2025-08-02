@@ -1,0 +1,10 @@
+dspy-ai
+fastapi
+uvicorn
+redis[hiredis]
+asyncpg
+neo4j
+numpy
+sentence-transformers
+pgvector
+pydantic
