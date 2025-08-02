@@ -1,0 +1,41 @@
+{
+  "requirements.txt": [
+    "dspy-ai",
+    "fastapi",
+    "uvicorn",
+    "redis[hiredis]",
+    "asyncpg",
+    "neo4j",
+    "numpy",
+    "sentence-transformers",
+    "pgvector",
+    "pydantic"
+  ],
+  "browser-extension/manifest.json": {
+    "manifest_version": 3,
+    "name": "DevIntel",
+    "version": "1.0.0",
+    "description": "Development Intelligence System",
+    "permissions": [
+      "storage",
+      "tabs"
+    ],
+    "host_permissions": [
+      "http://localhost:8000/*"
+    ],
+    "content_scripts": [
+      {
+        "matches": ["<all_urls>"],
+        "js": ["devintel.js"],
+        "run_at": "document_start"
+      }
+    ],
+    "action": {
+      "default_popup": "popup.html"
+    }
+  },
+  "browser-extension/popup.html": "<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { width: 300px; padding: 10px; font-family: system-ui; }\n    .status { padding: 8px; border-radius: 4px; margin: 10px 0; }\n    .connected { background: #e8f5e9; color: #2e7d32; }\n    .error { background: #ffebee; color: #c62828; }\n    button { width: 100%; padding: 8px; margin: 5px 0; }\n  </style>\n</head>\n<body>\n  <h3>DevIntel Status</h3>\n  <div id=\"status\" class=\"status\">Checking...</div>\n  <div id=\"session\"></div>\n  <button id=\"viewDashboard\">View Dashboard</button>\n  <button id=\"clearSession\">New Session</button>\n  <script src=\"popup.js\"></script>\n</body>\n</html>",
+  "browser-extension/popup.js": "// Check connection and display status\nchrome.tabs.query({active: true, currentWindow: true}, (tabs) => {\n  chrome.tabs.sendMessage(tabs[0].id, {action: 'getStatus'}, (response) => {\n    const statusEl = document.getElementById('status');\n    const sessionEl = document.getElementById('session');\n    \n    if (response && response.connected) {\n      statusEl.className = 'status connected';\n      statusEl.textContent = 'Connected to DevIntel';\n      sessionEl.textContent = `Session: ${response.sessionId}`;\n    } else {\n      statusEl.className = 'status error';\n      statusEl.textContent = 'Not connected';\n    }\n  });\n});\n\ndocument.getElementById('viewDashboard').addEventListener('click', () => {\n  chrome.tabs.create({url: 'http://localhost:8000/dashboard'});\n});\n\ndocument.getElementById('clearSession').addEventListener('click', () => {\n  chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {\n    chrome.tabs.sendMessage(tabs[0].id, {action: 'newSession'});\n    window.close();\n  });\n});",
+  "setup.sh": "#!/bin/bash\n# DevIntel Setup Script\n\necho \"🚀 Setting up DevIntel...\"\n\n# Start services\ndocker-compose up -d\n\n# Install Python dependencies\npip install -r requirements.txt\n\n# Initialize DSPy\necho \"Configuring DSPy...\"\npython -c \"import dspy; dspy.settings.configure(lm=dspy.OpenAI(model='gpt-4.1'))\"\n\n# Start server\necho \"Starting DevIntel server...\"\npython server.py",
+  "example_usage.py": "import asyncio\nfrom devintel import DevIntelAPI\n\nasync def example():\n    # Initialize\n    api = DevIntelAPI()\n    await api.initialize()\n    \n    # Simulate an error\n    error_event = {\n        'type': 'error',\n        'session_id': 'example_session',\n        'content': {\n            'message': 'Cannot read property \"map\" of undefined',\n            'code_context': 'const items = data.items.map(item => item.name)'\n        },\n        'stack_trace': 'TypeError: Cannot read property \"map\" of undefined\\n    at processData (app.js:42:28)',\n        'context': {\n            'framework': {'name': 'React', 'version': '18.2.0'},\n            'url': 'http://localhost:3000/dashboard'\n        }\n    }\n    \n    # Ingest and get solution\n    result = await api.ingest_event(error_event)\n    print(f\"Solution: {result['solution']['solution_code']}\")\n    print(f\"Confidence: {result['solution']['confidence']}\")\n    \n    # Check patterns\n    patterns = await api.get_patterns('example_session')\n    print(f\"Identified pattern: {patterns['pattern']}\")\n    \n    # Get changelog\n    changelog = await api.get_changelog('example_session')\n    print(f\"Events logged: {changelog['event_count']}\")\n\nif __name__ == '__main__':\n    asyncio.run(example())"
+}

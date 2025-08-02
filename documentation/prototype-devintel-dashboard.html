@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevIntel Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            height: 100vh;
+        }
+        
+        .sidebar {
+            background: #111;
+            border-right: 1px solid #222;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 30px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .nav-item {
+            padding: 12px 16px;
+            margin: 4px 0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .nav-item:hover {
+            background: #1a1a1a;
+        }
+        
+        .nav-item.active {
+            background: #667eea20;
+            color: #667eea;
+        }
+        
+        .main-content {
+            padding: 30px;
+            overflow-y: auto;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+        
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        
+        .stat-label {
+            color: #888;
+            font-size: 14px;
+        }
+        
+        .chart-container {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            height: 400px;
+            position: relative;
+        }
+        
+        .chart-title {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #e0e0e0;
+        }
+        
+        #patternGraph {
+            width: 100%;
+            height: 500px;
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 12px;
+        }
+        
+        .error-list {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 20px;
+        }
+        
+        .error-item {
+            padding: 15px;
+            border-bottom: 1px solid #222;
+            transition: background 0.2s;
+        }
+        
+        .error-item:hover {
+            background: #1a1a1a;
+        }
+        
+        .error-message {
+            color: #ef5350;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .error-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .solution {
+            margin-top: 10px;
+            padding: 10px;
+            background: #1a2f1a;
+            border-radius: 6px;
+            border-left: 3px solid #4caf50;
+        }
+        
+        .solution-code {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            color: #81c784;
+        }
+        
+        .confidence-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            background: #667eea20;
+            color: #667eea;
+        }
+        
+        .live-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: absolute;
+            top: 20px;
+            right: 20px;
+        }
+        
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: #4caf50;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 200px;
+            color: #666;
+        }
+        
+        .spinner {
+            border: 2px solid #222;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <aside class="sidebar">
+            <div class="logo">DevIntel</div>
+            <nav>
+                <div class="nav-item active" data-view="overview">
+                    <span>📊</span> Overview
+                </div>
+                <div class="nav-item" data-view="errors">
+                    <span>🐛</span> Errors & Solutions
+                </div>
+                <div class="nav-item" data-view="patterns">
+                    <span>🔍</span> Patterns
+                </div>
+                <div class="nav-item" data-view="changelog">
+                    <span>📝</span> Changelog
+                </div>
+            </nav>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #222;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 10px;">Current Session</div>
+                <div id="sessionId" style="font-family: monospace; font-size: 11px; color: #888;"></div>
+            </div>
+        </aside>
+        
+        <main class="main-content" id="mainContent">
+            <div class="live-indicator">
+                <div class="live-dot"></div>
+                <span style="font-size: 12px; color: #666;">Live</span>
+            </div>
+            
+            <!-- Overview View -->
+            <div id="overviewView" class="view">
+                <h1>Development Intelligence Overview</h1>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total Events</div>
+                        <div class="stat-value" id="totalEvents">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Errors Resolved</div>
+                        <div class="stat-value" id="errorsResolved">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Patterns Identified</div>
+                        <div class="stat-value" id="patternsIdentified">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Success Rate</div>
+                        <div class="stat-value" id="successRate">0%</div>
+                    </div>
+                </div>
+                
+                <div class="chart-container">
+                    <h3 class="chart-title">Event Timeline</h3>
+                    <canvas id="timelineChart"></canvas>
+                </div>
+                
+                <div class="chart-container">
+                    <h3 class="chart-title">Error Categories</h3>
+                    <canvas id="errorChart"></canvas>
+                </div>
+            </div>
+            
+            <!-- Errors View -->
+            <div id="errorsView" class="view" style="display: none;">
+                <h1>Errors & Solutions</h1>
+                <div class="error-list" id="errorList">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Patterns View -->
+            <div id="patternsView" class="view" style="display: none;">
+                <h1>Development Patterns</h1>
+                <div id="patternGraph"></div>
+            </div>
+            
+            <!-- Changelog View -->
+            <div id="changelogView" class="view" style="display: none;">
+                <h1>Session Changelog</h1>
+                <div id="changelogContent" class="error-list">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script>
+        // Dashboard Controller
+        class DevIntelDashboard {
+            constructor() {
+                this.apiUrl = 'http://localhost:8000';
+                this.currentSession = this.getSessionId();
+                this.charts = {};
+                this.cy = null;
+                this.init();
+            }
+            
+            getSessionId() {
+                // Get from URL params or generate new
+                const params = new URLSearchParams(window.location.search);
+                return params.get('session') || `session_${Date.now()}`;
+            }
+            
+            init() {
+                this.setupNavigation();
+                this.displaySessionId();
+                this.loadOverview();
+                this.startLiveUpdates();
+            }
+            
+            setupNavigation() {
+                document.querySelectorAll('.nav-item').forEach(item => {
+                    item.addEventListener('click', (e) => {
+                        // Update active state
+                        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+                        item.classList.add('active');
+                        
+                        // Show corresponding view
+                        const view = item.dataset.view;
+                        document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
+                        document.getElementById(`${view}View`).style.display = 'block';
+                        
+                        // Load view data
+                        this[`load${view.charAt(0).toUpperCase() + view.slice(1)}`]();
+                    });
+                });
+            }
+            
+            displaySessionId() {
+                document.getElementById('sessionId').textContent = this.currentSession;
+            }
+            
+            async loadOverview() {
+                try {
+                    // Load stats
+                    const changelog = await this.fetchChangelog();
+                    this.updateStats(changelog);
+                    
+                    // Create charts
+                    this.createTimelineChart(changelog);
+                    this.createErrorChart(changelog);
+                } catch (error) {
+                    console.error('Failed to load overview:', error);
+                }
+            }
+            
+            async loadErrors() {
+                const errorList = document.getElementById('errorList');
+                errorList.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+                
+                try {
+                    const changelog = await this.fetchChangelog();
+                    const errors = changelog.timeline.filter(e => e.type === 'error');
+                    
+                    errorList.innerHTML = errors.map(error => `
+                        <div class="error-item">
+                            <div class="error-message">${error.content.message || 'Unknown error'}</div>
+                            <div class="error-meta">
+                                <span>📍 ${error.context.url || 'Unknown URL'}</span>
+                                <span>🕒 ${new Date(error.timestamp).toLocaleTimeString()}</span>
+                                <span>🔧 ${error.context.framework?.name || 'Unknown'}</span>
+                            </div>
+                            ${error.solution ? `
+                                <div class="solution">
+                                    <div style="margin-bottom: 5px;">
+                                        <strong>Solution:</strong>
+                                        <span class="confidence-badge">
+                                            ${Math.round(error.solution.confidence * 100)}% confidence
+                                        </span>
+                                    </div>
+                                    <div class="solution-code">${error.solution.solution_code}</div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `).join('');
+                } catch (error) {
+                    errorList.innerHTML = '<div style="padding: 20px; color: #666;">Failed to load errors</div>';
+                }
+            }
+            
+            async loadPatterns() {
+                try {
+                    const patterns = await this.fetchPatterns();
+                    this.createPatternGraph(patterns);
+                } catch (error) {
+                    console.error('Failed to load patterns:', error);
+                }
+            }
+            
+            async loadChangelog() {
+                const content = document.getElementById('changelogContent');
+                content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+                
+                try {
+                    const changelog = await this.fetchChangelog();
+                    
+                    content.innerHTML = `
+                        <div style="margin-bottom: 20px;">
+                            <h3>Session Metrics</h3>
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px;">
+                                ${Object.entries(changelog.metrics || {}).map(([key, value]) => `
+                                    <div style="background: #1a1a1a; padding: 10px; border-radius: 6px;">
+                                        <div style="color: #666; font-size: 12px;">${key}</div>
+                                        <div style="font-size: 18px; font-weight: bold;">${value}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                        
+                        <h3>Event Timeline</h3>
+                        ${changelog.timeline.map(event => `
+                            <div class="error-item">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="color: ${this.getEventColor(event.type)};">
+                                        ${this.getEventIcon(event.type)} ${event.type}
+                                    </span>
+                                    <span style="color: #666; font-size: 12px;">
+                                        ${new Date(event.timestamp).toLocaleTimeString()}
+                                    </span>
+                                </div>
+                                <div style="margin-top: 5px; font-size: 13px; color: #888;">
+                                    ${JSON.stringify(event.content).substring(0, 100)}...
+                                </div>
+                            </div>
+                        `).join('')}
+                    `;
+                } catch (error) {
+                    content.innerHTML = '<div style="padding: 20px; color: #666;">Failed to load changelog</div>';
+                }
+            }
+            
+            updateStats(changelog) {
+                document.getElementById('totalEvents').textContent = changelog.event_count || 0;
+                document.getElementById('errorsResolved').textContent = 
+                    changelog.metrics?.successful_solutions || 0;
+                document.getElementById('patternsIdentified').textContent = 
+                    Object.keys(changelog.patterns || {}).length;
+                
+                const successRate = changelog.metrics?.solution_count > 0
+                    ? Math.round((changelog.metrics.successful_solutions / changelog.metrics.solution_count) * 100)
+                    : 0;
+                document.getElementById('successRate').textContent = `${successRate}%`;
+            }
+            
+            createTimelineChart(changelog) {
+                const ctx = document.getElementById('timelineChart').getContext('2d');
+                
+                // Group events by minute
+                const eventsByMinute = {};
+                changelog.timeline.forEach(event => {
+                    const minute = new Date(event.timestamp);
+                    minute.setSeconds(0, 0);
+                    const key = minute.toISOString();
+                    eventsByMinute[key] = (eventsByMinute[key] || 0) + 1;
+                });
+                
+                const labels = Object.keys(eventsByMinute).sort();
+                const data = labels.map(label => eventsByMinute[label]);
+                
+                if (this.charts.timeline) {
+                    this.charts.timeline.destroy();
+                }
+                
+                this.charts.timeline = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels.map(l => new Date(l).toLocaleTimeString()),
+                        datasets: [{
+                            label: 'Events',
+                            data: data,
+                            borderColor: '#667eea',
+                            backgroundColor: '#667eea20',
+                            tension: 0.4,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: { color: '#222' },
+                                ticks: { color: '#666' }
+                            },
+                            x: {
+                                grid: { color: '#222' },
+                                ticks: { color: '#666', maxTicksLimit: 10 }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            createErrorChart(changelog) {
+                const ctx = document.getElementById('errorChart').getContext('2d');
+                
+                // Count error types
+                const errorTypes = {};
+                changelog.timeline
+                    .filter(e => e.type === 'error')
+                    .forEach(error => {
+                        const type = error.content.message?.split(':')[0] || 'Unknown';
+                        errorTypes[type] = (errorTypes[type] || 0) + 1;
+                    });
+                
+                if (this.charts.errors) {
+                    this.charts.errors.destroy();
+                }
+                
+                this.charts.errors = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: Object.keys(errorTypes),
+                        datasets: [{
+                            data: Object.values(errorTypes),
+                            backgroundColor: [
+                                '#ef5350', '#ab47bc', '#5c6bc0',
+                                '#42a5f5', '#26c6da', '#66bb6a'
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                                labels: { color: '#888' }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            createPatternGraph(patterns) {
+                if (this.cy) {
+                    this.cy.destroy();
+                }
+                
+                // Create sample graph data (would come from real API)
+                const elements = [
+                    { data: { id: 'session', label: 'Current Session' } },
+                    { data: { id: patterns.pattern, label: patterns.pattern } },
+                    { data: { source: 'session', target: patterns.pattern } }
+                ];
+                
+                this.cy = cytoscape({
+                    container: document.getElementById('patternGraph'),
+                    elements: elements,
+                    style: [
+                        {
+                            selector: 'node',
+                            style: {
+                                'background-color': '#667eea',
+                                'label': 'data(label)',
+                                'color': '#e0e0e0',
+                                'text-outline-color': '#111',
+                                'text-outline-width': 2
+                            }
+                        },
+                        {
+                            selector: 'edge',
+                            style: {
+                                'width': 3,
+                                'line-color': '#444',
+                                'target-arrow-color': '#444',
+                                'target-arrow-shape': 'triangle',
+                                'curve-style': 'bezier'
+                            }
+                        }
+                    ],
+                    layout: {
+                        name: 'breadthfirst',
+                        directed: true,
+                        padding: 50
+                    }
+                });
+            }
+            
+            async fetchChangelog() {
+                const response = await fetch(`${this.apiUrl}/changelog/${this.currentSession}`);
+                if (!response.ok) throw new Error('Failed to fetch changelog');
+                return await response.json();
+            }
+            
+            async fetchPatterns() {
+                const response = await fetch(`${this.apiUrl}/patterns/${this.currentSession}`);
+                if (!response.ok) throw new Error('Failed to fetch patterns');
+                return await response.json();
+            }
+            
+            getEventColor(type) {
+                const colors = {
+                    'error': '#ef5350',
+                    'warn': '#ffa726',
+                    'log': '#66bb6a',
+                    'network': '#42a5f5'
+                };
+                return colors[type] || '#888';
+            }
+            
+            getEventIcon(type) {
+                const icons = {
+                    'error': '❌',
+                    'warn': '⚠️',
+                    'log': '📝',
+                    'network': '🌐'
+                };
+                return icons[type] || '📌';
+            }
+            
+            startLiveUpdates() {
+                // Poll for updates every 5 seconds
+                setInterval(() => {
+                    const activeView = document.querySelector('.nav-item.active').dataset.view;
+                    this[`load${activeView.charAt(0).toUpperCase() + activeView.slice(1)}`]();
+                }, 5000);
+            }
+        }
+        
+        // Initialize dashboard
+        const dashboard = new DevIntelDashboard();
+    </script>
+</body>
+</html>
